@@ -1,0 +1,5 @@
+{
+  "/explore/page": "app/explore/page.js",
+  "/(main)/album/[id]/page": "app/(main)/album/[id]/page.js",
+  "/(main)/artist/[id]/page": "app/(main)/artist/[id]/page.js"
+}
