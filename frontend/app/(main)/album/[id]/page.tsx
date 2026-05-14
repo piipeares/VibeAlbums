@@ -406,7 +406,11 @@ export default function AlbumPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {tracks.map((t: any, index: number) => (
-                  <tr key={t.id} className="group hover:bg-surface-hover transition-colors">
+                  <tr
+                    key={t.id}
+                    onClick={() => router.push(`/album/${t.id}`)}
+                    className="group hover:bg-surface-hover transition-colors cursor-pointer"
+                  >
                     <td className="px-4 py-3 text-sm text-zinc-500">{index + 1}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-col gap-1">
@@ -426,7 +430,7 @@ export default function AlbumPage() {
                               <React.Fragment key={a.id}>
                                 {i > 0 && ', '}
                                 <button
-                                  onClick={() => a.id && router.push(`/artist/${a.id}`)}
+                                  onClick={(e) => { e.stopPropagation(); a.id && router.push(`/artist/${a.id}`) }}
                                   className="hover:text-primary hover:underline"
                                 >
                                   {a.name}
@@ -439,7 +443,7 @@ export default function AlbumPage() {
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell">
                       <button
-                        onClick={() => t.artists?.[0]?.id && router.push(`/artist/${t.artists[0].id}`)}
+                        onClick={(e) => { e.stopPropagation(); t.artists?.[0]?.id && router.push(`/artist/${t.artists[0].id}`) }}
                         className="text-sm text-zinc-400 hover:text-primary transition-colors truncate"
                       >
                         {t.artists?.map((a: any) => a.name).join(', ') || 'Unknown'}
