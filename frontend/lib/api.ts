@@ -89,6 +89,7 @@ export interface SpotifyAlbum {
   total_tracks: number;
   popularity?: number;
   genres?: string[];
+  album_type?: 'album' | 'single' | 'compilation';
 }
 
 export interface SpotifyTrack {

@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import Image from 'next/image'
 import Link from 'next/link'
 import { motion } from 'framer-motion'
-import { ArrowLeft, Clock, Disc, Music2, User } from 'lucide-react'
+import { ArrowLeft, Disc, Disc3, Layers, Music2, User } from 'lucide-react'
 import { spotifyApi, SpotifyArtist, SpotifyAlbum, SpotifyTrack } from '@/lib/api'
 import { AlbumCard } from '@/components/album/album-card'
 import { AlbumCardSkeleton } from '@/components/ui/skeleton'
@@ -22,7 +22,14 @@ export default function ArtistPage() {
   const [albums, setAlbums] = React.useState<SpotifyAlbum[]>([])
   const [topTracks, setTopTracks] = React.useState<SpotifyTrack[]>([])
   const [isLoading, setIsLoading] = React.useState(true)
-  const [activeTab, setActiveTab] = React.useState<'albums' | 'songs'>('albums')
+  type Tab = 'albums' | 'singles' | 'compilations' | 'songs'
+  const [activeTab, setActiveTab] = React.useState<Tab>('albums')
+
+  const albumsByType = React.useMemo(() => ({
+    albums: albums.filter((a) => a.album_type === 'album'),
+    singles: albums.filter((a) => a.album_type === 'single'),
+    compilations: albums.filter((a) => a.album_type === 'compilation'),
+  }), [albums])
 
   React.useEffect(() => {
     loadData()
@@ -142,7 +149,7 @@ export default function ArtistPage() {
       </motion.div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-6">
+      <div className="flex flex-wrap gap-2 mb-6">
         <Button
           variant={activeTab === 'albums' ? 'default' : 'outline'}
           size="lg"
@@ -150,7 +157,25 @@ export default function ArtistPage() {
           className="gap-2"
         >
           <Disc className="h-5 w-5" />
-          Álbumes ({albums.length})
+          Álbumes ({albumsByType.albums.length})
+        </Button>
+        <Button
+          variant={activeTab === 'singles' ? 'default' : 'outline'}
+          size="lg"
+          onClick={() => setActiveTab('singles')}
+          className="gap-2"
+        >
+          <Disc3 className="h-5 w-5" />
+          Singles ({albumsByType.singles.length})
+        </Button>
+        <Button
+          variant={activeTab === 'compilations' ? 'default' : 'outline'}
+          size="lg"
+          onClick={() => setActiveTab('compilations')}
+          className="gap-2"
+        >
+          <Layers className="h-5 w-5" />
+          Compilaciones ({albumsByType.compilations.length})
         </Button>
         <Button
           variant={activeTab === 'songs' ? 'default' : 'outline'}
@@ -163,22 +188,26 @@ export default function ArtistPage() {
         </Button>
       </div>
 
-      {/* Albums Section */}
-      {activeTab === 'albums' && (
+      {/* Releases Section (albums / singles / compilations) */}
+      {activeTab !== 'songs' && (
         <motion.section
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className="mb-12"
         >
-          {albums.length > 0 ? (
+          {albumsByType[activeTab].length > 0 ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-              {albums.map((album, index) => (
+              {albumsByType[activeTab].map((album, index) => (
                 <AlbumCard key={album.id} album={album} index={index} />
               ))}
             </div>
           ) : (
             <div className="rounded-xl border border-border bg-surface-elevated p-12 text-center">
-              <p className="text-zinc-500">No se encontraron álbumes</p>
+              <p className="text-zinc-500">
+                {activeTab === 'albums' && 'No se encontraron álbumes'}
+                {activeTab === 'singles' && 'No se encontraron singles'}
+                {activeTab === 'compilations' && 'No se encontraron compilaciones'}
+              </p>
             </div>
           )}
         </motion.section>
