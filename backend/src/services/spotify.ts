@@ -32,6 +32,7 @@ export interface SpotifyAlbum {
   total_tracks: number;
   popularity?: number;
   genres?: string[];
+  album_type?: 'album' | 'single' | 'compilation';
 }
 
 export interface SpotifyArtistFull {
@@ -250,7 +251,7 @@ export async function getArtist(artistId: string): Promise<SpotifyArtistFull> {
 export async function getArtistAlbums(artistId: string, limit = 20): Promise<{ items: SpotifyAlbum[] }> {
   if (limit <= SPOTIFY_MAX_LIMIT) {
     console.log(`[Artist Albums] artist=${artistId}, limit=${limit} (single request)`);
-    const data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums?limit=${limit}&include_groups=album,single`);
+    const data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums?limit=${limit}&include_groups=album,single,compilation`);
     return data;
   }
 
@@ -262,7 +263,7 @@ export async function getArtistAlbums(artistId: string, limit = 20): Promise<{ i
   for (let i = 0; i < batches; i++) {
     const batchLimit = Math.min(SPOTIFY_MAX_LIMIT, limit - albums.length);
     console.log(`[Artist Albums] Batch ${i + 1}/${batches}, limit=${batchLimit}, offset=${offset}`);
-    const data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums?limit=${batchLimit}&offset=${offset}&include_groups=album,single`);
+    const data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums?limit=${batchLimit}&offset=${offset}&include_groups=album,single,compilation`);
     albums.push(...(data.items || []));
     offset += batchLimit;
   }
