@@ -91,9 +91,6 @@ export default function HomePage() {
             </Button>
           </div>
         </div>
-        {/* Decorative elements */}
-        <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-primary/20 blur-3xl" />
-        <div className="absolute -bottom-20 -left-20 h-64 w-64 rounded-full bg-secondary/20 blur-3xl" />
       </motion.section>
 
       {/* Featured Albums */}
