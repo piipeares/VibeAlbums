@@ -1,41 +1,77 @@
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import db, { List, ListItem } from '../services/db.js';
+import { supabase } from '../services/supabase.js';
 import { authMiddleware, optionalAuth, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 
+// ─── Helpers ─────────────────────────────────────────────────────
+
+async function attachUserToList(list: any) {
+  const { data: user } = await supabase
+    .from('users')
+    .select('id, username, display_name, avatar')
+    .eq('id', list.user_id)
+    .single();
+
+  return {
+    ...list,
+    user: user ? {
+      id: user.id,
+      username: user.username,
+      displayName: user.display_name,
+      avatar: user.avatar
+    } : { id: '', username: 'Deleted', displayName: 'Deleted', avatar: '' }
+  };
+}
+
+function mapListResponse(l: any) {
+  return {
+    id: l.id,
+    userId: l.user_id,
+    name: l.name,
+    description: l.description,
+    isPublic: l.is_public,
+    items: l.items || [],
+    createdAt: l.created_at,
+    updatedAt: l.updated_at,
+    user: l.user,
+    ...(l.isOwner !== undefined ? { isOwner: l.isOwner } : {}),
+    ...(l.itemsCount !== undefined ? { itemsCount: l.itemsCount } : {})
+  };
+}
+
 // Get all public lists (for discovery)
 router.get('/public', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
+    const { limit = '20', offset = '0' } = req.query;
+    const limitNum = Math.max(1, parseInt(limit as string, 10) || 20);
+    const offsetNum = Math.max(0, parseInt(offset as string, 10) || 0);
 
-    const { limit = 20, offset = 0 } = req.query;
+    const { data: lists, count } = await supabase
+      .from('lists')
+      .select('*', { count: 'exact' })
+      .eq('is_public', true)
+      .order('created_at', { ascending: false })
+      .range(offsetNum, offsetNum + limitNum - 1);
 
-    const lists = db.data.lists
-      .filter(l => l.isPublic)
-      .map(l => {
-        const user = db.data.users.find(u => u.id === l.userId)!;
+    const mapped = await Promise.all(
+      (lists || []).map(async (l) => {
+        const enriched = await attachUserToList(l);
         return {
-          id: l.id,
-          name: l.name,
-          description: l.description,
-          itemsCount: l.items.length,
-          createdAt: l.createdAt,
-          user: {
-            id: user.id,
-            username: user.username,
-            displayName: user.displayName,
-            avatar: user.avatar
-          }
+          id: enriched.id,
+          name: enriched.name,
+          description: enriched.description,
+          itemsCount: enriched.items?.length || 0,
+          createdAt: enriched.created_at,
+          user: enriched.user
         };
       })
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(Number(offset), Number(offset) + Number(limit));
+    );
 
     res.json({
-      lists,
-      total: db.data.lists.filter(l => l.isPublic).length
+      lists: mapped,
+      total: count ?? 0
     });
   } catch (error) {
     console.error('Get public lists error:', error);
@@ -46,22 +82,23 @@ router.get('/public', optionalAuth, async (req: AuthRequest, res: Response) => {
 // Get user's own lists
 router.get('/', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
+    const { data: lists } = await supabase
+      .from('lists')
+      .select('*')
+      .eq('user_id', req.user!.userId)
+      .order('created_at', { ascending: false });
 
-    const lists = db.data.lists
-      .filter(l => l.userId === req.user!.userId)
-      .map(l => ({
-        id: l.id,
-        name: l.name,
-        description: l.description,
-        isPublic: l.isPublic,
-        itemsCount: l.items.length,
-        createdAt: l.createdAt,
-        updatedAt: l.updatedAt
-      }))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const mapped = (lists || []).map(l => ({
+      id: l.id,
+      name: l.name,
+      description: l.description,
+      isPublic: l.is_public,
+      itemsCount: l.items?.length || 0,
+      createdAt: l.created_at,
+      updatedAt: l.updated_at
+    }));
 
-    res.json(lists);
+    res.json(mapped);
   } catch (error) {
     console.error('Get my lists error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -71,34 +108,27 @@ router.get('/', authMiddleware, async (req: AuthRequest, res: Response) => {
 // Get single list
 router.get('/:id', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
-
-    const list = db.data.lists.find(l => l.id === req.params.id);
+    const { data: list } = await supabase
+      .from('lists')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
 
     if (!list) {
       res.status(404).json({ error: 'List not found' });
       return;
     }
 
-    // Check access
-    const isOwner = req.user?.userId === list.userId;
-    if (!list.isPublic && !isOwner) {
+    const isOwner = req.user?.userId === list.user_id;
+    if (!list.is_public && !isOwner) {
       res.status(403).json({ error: 'This list is private' });
       return;
     }
 
-    const user = db.data.users.find(u => u.id === list.userId)!;
+    const enriched = await attachUserToList(list);
+    const response = mapListResponse({ ...enriched, isOwner });
 
-    res.json({
-      ...list,
-      user: {
-        id: user.id,
-        username: user.username,
-        displayName: user.displayName,
-        avatar: user.avatar
-      },
-      isOwner
-    });
+    res.json(response);
   } catch (error) {
     console.error('Get list error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -115,23 +145,22 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    await db.read();
-
-    const newList: List = {
+    const now = new Date().toISOString();
+    const newList = {
       id: uuidv4(),
-      userId: req.user!.userId,
+      user_id: req.user!.userId,
       name,
       description: description || '',
-      isPublic: isPublic ?? true,
+      is_public: isPublic ?? true,
       items: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      created_at: now,
+      updated_at: now
     };
 
-    db.data.lists.push(newList);
-    await db.write();
+    const { error } = await supabase.from('lists').insert(newList);
+    if (error) throw error;
 
-    res.status(201).json(newList);
+    res.status(201).json(mapListResponse(newList));
   } catch (error) {
     console.error('Create list error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -143,30 +172,41 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const { name, description, isPublic } = req.body;
 
-    await db.read();
+    const { data: list } = await supabase
+      .from('lists')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
 
-    const listIndex = db.data.lists.findIndex(l => l.id === req.params.id);
-
-    if (listIndex === -1) {
+    if (!list) {
       res.status(404).json({ error: 'List not found' });
       return;
     }
 
-    const list = db.data.lists[listIndex];
-
-    if (list.userId !== req.user!.userId) {
+    if (list.user_id !== req.user!.userId) {
       res.status(403).json({ error: 'Not authorized' });
       return;
     }
 
-    if (name !== undefined) list.name = name;
-    if (description !== undefined) list.description = description;
-    if (isPublic !== undefined) list.isPublic = isPublic;
-    list.updatedAt = new Date().toISOString();
+    const updates: any = { updated_at: new Date().toISOString() };
+    if (name !== undefined) updates.name = name;
+    if (description !== undefined) updates.description = description;
+    if (isPublic !== undefined) updates.is_public = isPublic;
 
-    await db.write();
+    const { error } = await supabase
+      .from('lists')
+      .update(updates)
+      .eq('id', req.params.id);
 
-    res.json(list);
+    if (error) throw error;
+
+    const { data: updated } = await supabase
+      .from('lists')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
+
+    res.json(mapListResponse(updated));
   } catch (error) {
     console.error('Update list error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -176,24 +216,24 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
 // Delete list
 router.delete('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
+    const { data: list } = await supabase
+      .from('lists')
+      .select('id, user_id')
+      .eq('id', req.params.id)
+      .single();
 
-    const listIndex = db.data.lists.findIndex(l => l.id === req.params.id);
-
-    if (listIndex === -1) {
+    if (!list) {
       res.status(404).json({ error: 'List not found' });
       return;
     }
 
-    const list = db.data.lists[listIndex];
-
-    if (list.userId !== req.user!.userId) {
+    if (list.user_id !== req.user!.userId) {
       res.status(403).json({ error: 'Not authorized' });
       return;
     }
 
-    db.data.lists.splice(listIndex, 1);
-    await db.write();
+    const { error } = await supabase.from('lists').delete().eq('id', req.params.id);
+    if (error) throw error;
 
     res.json({ success: true, message: 'List deleted' });
   } catch (error) {
@@ -212,30 +252,30 @@ router.post('/:id/items', authMiddleware, async (req: AuthRequest, res: Response
       return;
     }
 
-    await db.read();
+    const { data: list } = await supabase
+      .from('lists')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
 
-    const listIndex = db.data.lists.findIndex(l => l.id === req.params.id);
-
-    if (listIndex === -1) {
+    if (!list) {
       res.status(404).json({ error: 'List not found' });
       return;
     }
 
-    const list = db.data.lists[listIndex];
-
-    if (list.userId !== req.user!.userId) {
+    if (list.user_id !== req.user!.userId) {
       res.status(403).json({ error: 'Not authorized' });
       return;
     }
 
     // Check if album already in list
-    const existingItem = list.items.find(item => item.albumId === albumId);
+    const existingItem = (list.items || []).find((item: any) => item.albumId === albumId);
     if (existingItem) {
       res.status(400).json({ error: 'Album already in this list' });
       return;
     }
 
-    const newItem: ListItem = {
+    const newItem = {
       albumId,
       albumName,
       albumArtist: albumArtist || '',
@@ -244,10 +284,14 @@ router.post('/:id/items', authMiddleware, async (req: AuthRequest, res: Response
       note
     };
 
-    list.items.push(newItem);
-    list.updatedAt = new Date().toISOString();
+    const updatedItems = [...(list.items || []), newItem];
 
-    await db.write();
+    const { error } = await supabase
+      .from('lists')
+      .update({ items: updatedItems, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id);
+
+    if (error) throw error;
 
     res.status(201).json(newItem);
   } catch (error) {
@@ -259,33 +303,37 @@ router.post('/:id/items', authMiddleware, async (req: AuthRequest, res: Response
 // Remove item from list
 router.delete('/:id/items/:albumId', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
+    const { data: list } = await supabase
+      .from('lists')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
 
-    const listIndex = db.data.lists.findIndex(l => l.id === req.params.id);
-
-    if (listIndex === -1) {
+    if (!list) {
       res.status(404).json({ error: 'List not found' });
       return;
     }
 
-    const list = db.data.lists[listIndex];
-
-    if (list.userId !== req.user!.userId) {
+    if (list.user_id !== req.user!.userId) {
       res.status(403).json({ error: 'Not authorized' });
       return;
     }
 
-    const itemIndex = list.items.findIndex(item => item.albumId === req.params.albumId);
+    const updatedItems = (list.items || []).filter(
+      (item: any) => item.albumId !== req.params.albumId
+    );
 
-    if (itemIndex === -1) {
+    if (updatedItems.length === (list.items || []).length) {
       res.status(404).json({ error: 'Item not found in list' });
       return;
     }
 
-    list.items.splice(itemIndex, 1);
-    list.updatedAt = new Date().toISOString();
+    const { error } = await supabase
+      .from('lists')
+      .update({ items: updatedItems, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id);
 
-    await db.write();
+    if (error) throw error;
 
     res.json({ success: true, message: 'Item removed from list' });
   } catch (error) {
@@ -304,33 +352,35 @@ router.put('/:id/reorder', authMiddleware, async (req: AuthRequest, res: Respons
       return;
     }
 
-    await db.read();
+    const { data: list } = await supabase
+      .from('lists')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
 
-    const listIndex = db.data.lists.findIndex(l => l.id === req.params.id);
-
-    if (listIndex === -1) {
+    if (!list) {
       res.status(404).json({ error: 'List not found' });
       return;
     }
 
-    const list = db.data.lists[listIndex];
-
-    if (list.userId !== req.user!.userId) {
+    if (list.user_id !== req.user!.userId) {
       res.status(403).json({ error: 'Not authorized' });
       return;
     }
 
     // Reorder based on itemIds array
     const reorderedItems = itemIds
-      .map(id => list.items.find(item => item.albumId === id))
-      .filter(Boolean) as ListItem[];
+      .map((id: string) => (list.items || []).find((item: any) => item.albumId === id))
+      .filter(Boolean);
 
-    list.items = reorderedItems;
-    list.updatedAt = new Date().toISOString();
+    const { error } = await supabase
+      .from('lists')
+      .update({ items: reorderedItems, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id);
 
-    await db.write();
+    if (error) throw error;
 
-    res.json(list);
+    res.json(mapListResponse({ ...list, items: reorderedItems }));
   } catch (error) {
     console.error('Reorder items error:', error);
     res.status(500).json({ error: 'Internal server error' });

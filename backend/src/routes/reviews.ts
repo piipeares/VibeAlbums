@@ -1,40 +1,65 @@
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import db, { Review, safeRead } from '../services/db.js';
+import { supabase } from '../services/supabase.js';
 import { authMiddleware, optionalAuth, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 
-// ─── Helper: attach user info to reviews ──────────────────────────
-function attachUser(review: Review) {
-  const user = db.data.users.find(u => u.id === review.userId);
-  if (!user) return { ...review, user: { id: '', username: 'Deleted', displayName: 'Deleted', avatar: '' } };
-  return {
-    ...review,
-    user: {
-      id: user.id,
-      username: user.username,
-      displayName: user.displayName,
-      avatar: user.avatar
-    }
-  };
-}
+// ─── Helpers ─────────────────────────────────────────────────────
 
-// ─── Helper: attach vote data to review responses ────────────────
-function attachVoteData(reviewId: string, userId?: string) {
-  const votes = db.data.reviewVotes.filter(v => v.reviewId === reviewId);
-  const upvotes = votes.filter(v => v.direction === 1).length;
-  const downvotes = votes.filter(v => v.direction === -1).length;
+async function enrichReview(review: any, userId?: string) {
+  // Attach user info
+  let userInfo = { id: '', username: 'Deleted', displayName: 'Deleted', avatar: '' };
+  if (review.user_id) {
+    const { data: u } = await supabase
+      .from('users')
+      .select('id, username, display_name, avatar')
+      .eq('id', review.user_id)
+      .single();
+    if (u) {
+      userInfo = { id: u.id, username: u.username, displayName: u.display_name, avatar: u.avatar };
+    }
+  }
+
+  // Vote data
+  const { data: votes } = await supabase
+    .from('review_votes')
+    .select('*')
+    .eq('review_id', review.id);
+
+  const allVotes = votes || [];
+  const upvotes = allVotes.filter(v => v.direction === 1).length;
+  const downvotes = allVotes.filter(v => v.direction === -1).length;
   const voteScore = upvotes - downvotes;
   let userVote: 1 | -1 | null = null;
   if (userId) {
-    const found = votes.find(v => v.userId === userId);
+    const found = allVotes.find(v => v.user_id === userId);
     if (found) userVote = found.direction;
   }
-  return { voteScore, userVote };
+
+  // Comment count
+  const { count } = await supabase
+    .from('review_comments')
+    .select('id', { count: 'exact', head: true })
+    .eq('review_id', review.id);
+
+  return {
+    id: review.id,
+    userId: review.user_id,
+    targetId: review.target_id,
+    targetType: review.target_type,
+    rating: review.rating,
+    content: review.content,
+    createdAt: review.created_at,
+    updatedAt: review.updated_at,
+    user: userInfo,
+    voteScore,
+    userVote,
+    commentCount: count ?? 0
+  };
 }
 
-function computeStats(reviews: Review[]) {
+function computeStats(reviews: any[]) {
   const avgRating = reviews.length > 0
     ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
     : 0;
@@ -49,41 +74,33 @@ function computeStats(reviews: Review[]) {
   };
 }
 
-// Lookup existing review for a user + target combination
-async function findExistingReview(userId: string, targetId: string, targetType: 'album' | 'track'): Promise<Review | undefined> {
-  await safeRead();
-  return db.data.reviews.find(r => r.userId === userId && r.targetId === targetId && r.targetType === targetType);
-}
-
-// Get reviews (with optional filters: targetId, targetType, userId)
+// GET /api/reviews — list with optional filters
 router.get('/', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await safeRead();
-
     const { targetId, targetType, userId, limit = '20', offset = '0' } = req.query;
 
-    let reviews = [...db.data.reviews];
+    let query = supabase
+      .from('reviews')
+      .select('*', { count: 'exact' });
 
-    if (targetId) reviews = reviews.filter(r => r.targetId === targetId);
-    if (targetType) reviews = reviews.filter(r => r.targetType === targetType);
-    if (userId) reviews = reviews.filter(r => r.userId === userId);
+    if (targetId) query = query.eq('target_id', targetId as string);
+    if (targetType) query = query.eq('target_type', targetType as string);
+    if (userId) query = query.eq('user_id', userId as string);
 
-    // Sort by newest first
-    reviews.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    query = query.order('created_at', { ascending: false });
 
     const limitNum = Math.max(1, parseInt(limit as string, 10) || 20);
     const offsetNum = Math.max(0, parseInt(offset as string, 10) || 0);
-    const sliced = reviews.slice(offsetNum, offsetNum + limitNum);
 
-    const enriched = sliced.map(r => ({
-      ...attachUser(r),
-      ...attachVoteData(r.id, req.user?.userId),
-      commentCount: db.data.reviewComments.filter(c => c.reviewId === r.id).length
-    }));
+    const { data: reviews, count } = await query.range(offsetNum, offsetNum + limitNum - 1);
+
+    const enriched = await Promise.all(
+      (reviews || []).map(r => enrichReview(r, req.user?.userId))
+    );
 
     res.json({
       reviews: enriched,
-      total: reviews.length,
+      total: count ?? 0,
       limit: limitNum,
       offset: offsetNum
     });
@@ -93,24 +110,23 @@ router.get('/', optionalAuth, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// Get reviews + stats for a specific target (album or track)
-async function getTargetReviews(targetId: string, userId?: string) {
-  await safeRead();
-  return db.data.reviews
-    .filter(r => r.targetId === targetId)
-    .map(r => ({
-      ...attachUser(r),
-      ...attachVoteData(r.id, userId),
-      commentCount: db.data.reviewComments.filter(c => c.reviewId === r.id).length
-    }))
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-}
-
 // GET /api/reviews/album/:id — reviews for an album
 router.get('/album/:id', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const reviews = await getTargetReviews(req.params.id, req.user?.userId);
-    res.json({ reviews, stats: computeStats(db.data.reviews.filter(r => r.targetId === req.params.id)) });
+    const { data: reviews } = await supabase
+      .from('reviews')
+      .select('*')
+      .eq('target_id', req.params.id)
+      .order('created_at', { ascending: false });
+
+    const enriched = await Promise.all(
+      (reviews || []).map(r => enrichReview(r, req.user?.userId))
+    );
+
+    res.json({
+      reviews: enriched,
+      stats: computeStats(reviews || [])
+    });
   } catch (error) {
     console.error('Get album reviews error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -120,15 +136,27 @@ router.get('/album/:id', optionalAuth, async (req: AuthRequest, res: Response) =
 // GET /api/reviews/track/:id — reviews for a track
 router.get('/track/:id', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const reviews = await getTargetReviews(req.params.id, req.user?.userId);
-    res.json({ reviews, stats: computeStats(db.data.reviews.filter(r => r.targetId === req.params.id)) });
+    const { data: reviews } = await supabase
+      .from('reviews')
+      .select('*')
+      .eq('target_id', req.params.id)
+      .order('created_at', { ascending: false });
+
+    const enriched = await Promise.all(
+      (reviews || []).map(r => enrichReview(r, req.user?.userId))
+    );
+
+    res.json({
+      reviews: enriched,
+      stats: computeStats(reviews || [])
+    });
   } catch (error) {
     console.error('Get track reviews error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Create review
+// POST /api/reviews — create review
 router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const { targetId, targetType, rating, content } = req.body;
@@ -149,104 +177,119 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
     }
 
     // Check duplicate
-    const existing = await findExistingReview(req.user!.userId, targetId, targetType);
+    const { data: existing } = await supabase
+      .from('reviews')
+      .select('id')
+      .eq('user_id', req.user!.userId)
+      .eq('target_id', targetId)
+      .eq('target_type', targetType)
+      .maybeSingle();
+
     if (existing) {
       res.status(400).json({ error: 'You already reviewed this. Use PUT to update.' });
       return;
     }
 
-    await safeRead();
-
-    const newReview: Review = {
+    const now = new Date().toISOString();
+    const newReview = {
       id: uuidv4(),
-      userId: req.user!.userId,
-      targetId,
-      targetType,
+      user_id: req.user!.userId,
+      target_id: targetId,
+      target_type: targetType,
       rating,
       content: content || '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      created_at: now,
+      updated_at: now
     };
 
-    db.data.reviews.push(newReview);
-    await db.write();
+    const { error } = await supabase.from('reviews').insert(newReview);
+    if (error) throw error;
 
-    res.status(201).json({ ...attachUser(newReview), commentCount: 0 });
+    const enriched = await enrichReview(newReview, req.user!.userId);
+
+    res.status(201).json(enriched);
   } catch (error) {
     console.error('Create review error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Update review
+// PUT /api/reviews/:id — update review
 router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const { rating, content } = req.body;
 
-    await safeRead();
+    const { data: review, error: fetchError } = await supabase
+      .from('reviews')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
 
-    const reviewIndex = db.data.reviews.findIndex(r => r.id === req.params.id);
-    if (reviewIndex === -1) {
+    if (fetchError || !review) {
       res.status(404).json({ error: 'Review not found' });
       return;
     }
 
-    const review = db.data.reviews[reviewIndex];
-
-    if (review.userId !== req.user!.userId) {
+    if (review.user_id !== req.user!.userId) {
       res.status(403).json({ error: 'Not authorized to update this review' });
       return;
     }
 
+    const updates: any = { updated_at: new Date().toISOString() };
     if (rating !== undefined) {
       if (rating < 1 || rating > 5) {
         res.status(400).json({ error: 'Rating must be between 1 and 5' });
         return;
       }
-      review.rating = rating;
+      updates.rating = rating;
     }
-
     if (content !== undefined) {
-      review.content = content;
+      updates.content = content;
     }
 
-    review.updatedAt = new Date().toISOString();
-    await db.write();
+    const { error: updateError } = await supabase
+      .from('reviews')
+      .update(updates)
+      .eq('id', req.params.id);
 
-    res.json({
-      ...attachUser(review),
-      commentCount: db.data.reviewComments.filter(c => c.reviewId === review.id).length
-    });
+    if (updateError) throw updateError;
+
+    const { data: updated } = await supabase
+      .from('reviews')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
+
+    const enriched = await enrichReview(updated, req.user!.userId);
+    res.json(enriched);
   } catch (error) {
     console.error('Update review error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Delete review
+// DELETE /api/reviews/:id — delete review (cascade handled by DB)
 router.delete('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    await safeRead();
+    const { data: review, error: fetchError } = await supabase
+      .from('reviews')
+      .select('id, user_id')
+      .eq('id', req.params.id)
+      .single();
 
-    const reviewIndex = db.data.reviews.findIndex(r => r.id === req.params.id);
-    if (reviewIndex === -1) {
+    if (fetchError || !review) {
       res.status(404).json({ error: 'Review not found' });
       return;
     }
 
-    const review = db.data.reviews[reviewIndex];
-    if (review.userId !== req.user!.userId) {
+    if (review.user_id !== req.user!.userId) {
       res.status(403).json({ error: 'Not authorized to delete this review' });
       return;
     }
 
-    db.data.reviews.splice(reviewIndex, 1);
-
-    // Cascade delete votes and comments for this review
-    db.data.reviewVotes = db.data.reviewVotes.filter(v => v.reviewId !== req.params.id);
-    db.data.reviewComments = db.data.reviewComments.filter(c => c.reviewId !== req.params.id);
-
-    await db.write();
+    // Delete the review (votes and comments cascade via DB foreign keys)
+    const { error } = await supabase.from('reviews').delete().eq('id', req.params.id);
+    if (error) throw error;
 
     res.json({ success: true, message: 'Review deleted' });
   } catch (error) {

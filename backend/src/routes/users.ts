@@ -1,9 +1,51 @@
 import { Router, Response } from 'express';
-import db, { User, safeRead } from '../services/db.js';
+import { supabase } from '../services/supabase.js';
 import { authMiddleware, optionalAuth, AuthRequest } from '../middleware/auth.js';
 import { getTargetInfo } from '../services/spotify.js';
 
 const router = Router();
+
+// ─── Helpers ─────────────────────────────────────────────────────
+
+function mapUser(u: any, isFollowing?: boolean, stats?: any) {
+  return {
+    id: u.id,
+    username: u.username,
+    displayName: u.display_name,
+    avatar: u.avatar,
+    bio: u.bio,
+    ...(stats ? { stats } : {}),
+    ...(isFollowing !== undefined ? { isFollowing } : {}),
+    ...(u.created_at ? { createdAt: u.created_at } : {})
+  };
+}
+
+async function getUserByUsername(username: string) {
+  const { data } = await supabase
+    .from('users')
+    .select('*')
+    .ilike('username', username)
+    .maybeSingle();
+  return data;
+}
+
+async function getReviewVoteData(reviewId: string, userId?: string) {
+  const { data: votes } = await supabase
+    .from('review_votes')
+    .select('*')
+    .eq('review_id', reviewId);
+
+  const allVotes = votes || [];
+  const upvotes = allVotes.filter(v => v.direction === 1).length;
+  const downvotes = allVotes.filter(v => v.direction === -1).length;
+  const voteScore = upvotes - downvotes;
+  let userVote: 1 | -1 | null = null;
+  if (userId) {
+    const found = allVotes.find(v => v.user_id === userId);
+    if (found) userVote = found.direction;
+  }
+  return { voteScore, userVote };
+}
 
 // Search users by username or displayName
 router.get('/search', optionalAuth, async (req: AuthRequest, res: Response) => {
@@ -15,24 +57,22 @@ router.get('/search', optionalAuth, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    await safeRead();
-
     const query = q.toLowerCase().trim();
-    const results = db.data.users
-      .filter(u =>
-        u.username.toLowerCase().includes(query) ||
-        u.displayName.toLowerCase().includes(query)
-      )
-      .slice(0, 20)
-      .map(u => ({
-        id: u.id,
-        username: u.username,
-        displayName: u.displayName,
-        avatar: u.avatar,
-        bio: u.bio
-      }));
+    const { data: users } = await supabase
+      .from('users')
+      .select('id, username, display_name, avatar, bio')
+      .or(`username.ilike.%${query}%,display_name.ilike.%${query}%`)
+      .limit(20);
 
-    res.json(results);
+    const mapped = (users || []).map(u => ({
+      id: u.id,
+      username: u.username,
+      displayName: u.display_name,
+      avatar: u.avatar,
+      bio: u.bio
+    }));
+
+    res.json(mapped);
   } catch (error) {
     console.error('User search error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -42,45 +82,37 @@ router.get('/search', optionalAuth, async (req: AuthRequest, res: Response) => {
 // Get user profile
 router.get('/:username', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await safeRead();
-
-    const user = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
-
+    const user = await getUserByUsername(req.params.username);
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    // Get stats
-    const reviewsCount = db.data.reviews.filter(r => r.userId === user.id).length;
-    const listsCount = db.data.lists.filter(l => l.userId === user.id && l.isPublic).length;
-    const followersCount = db.data.follows.filter(f => f.followingId === user.id).length;
-    const followingCount = db.data.follows.filter(f => f.followerId === user.id).length;
+    // Get stats in parallel
+    const [reviewsRes, listsRes, followersRes, followingRes] = await Promise.all([
+      supabase.from('reviews').select('id', { count: 'exact', head: true }).eq('user_id', user.id),
+      supabase.from('lists').select('id', { count: 'exact', head: true }).eq('user_id', user.id).eq('is_public', true),
+      supabase.from('follows').select('id', { count: 'exact', head: true }).eq('following_id', user.id),
+      supabase.from('follows').select('id', { count: 'exact', head: true }).eq('follower_id', user.id),
+    ]);
 
-    // Check if current user follows this user
     let isFollowing = false;
     if (req.user) {
-      const follow = db.data.follows.find(
-        f => f.followerId === req.user!.userId && f.followingId === user.id
-      );
+      const { data: follow } = await supabase
+        .from('follows')
+        .select('id')
+        .eq('follower_id', req.user.userId)
+        .eq('following_id', user.id)
+        .maybeSingle();
       isFollowing = !!follow;
     }
 
-    res.json({
-      id: user.id,
-      username: user.username,
-      displayName: user.displayName,
-      avatar: user.avatar,
-      bio: user.bio,
-      stats: {
-        reviews: reviewsCount,
-        lists: listsCount,
-        followers: followersCount,
-        following: followingCount
-      },
-      isFollowing,
-      createdAt: user.createdAt
-    });
+    res.json(mapUser(user, isFollowing, {
+      reviews: reviewsRes.count ?? 0,
+      lists: listsRes.count ?? 0,
+      followers: followersRes.count ?? 0,
+      following: followingRes.count ?? 0
+    }));
   } catch (error) {
     console.error('Get user error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -90,36 +122,36 @@ router.get('/:username', optionalAuth, async (req: AuthRequest, res: Response) =
 // Update user profile
 router.put('/:username', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    await safeRead();
-
-    const user = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
-
+    const user = await getUserByUsername(req.params.username);
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    // Can only update own profile
     if (user.id !== req.user!.userId) {
       res.status(403).json({ error: 'Not authorized' });
       return;
     }
 
     const { displayName, avatar, bio } = req.body;
+    const updates: any = {};
+    if (displayName !== undefined) updates.display_name = displayName;
+    if (avatar !== undefined) updates.avatar = avatar;
+    if (bio !== undefined) updates.bio = bio;
 
-    if (displayName !== undefined) user.displayName = displayName;
-    if (avatar !== undefined) user.avatar = avatar;
-    if (bio !== undefined) user.bio = bio;
+    if (Object.keys(updates).length > 0) {
+      const { error } = await supabase.from('users').update(updates).eq('id', user.id);
+      if (error) throw error;
+    }
 
-    await db.write();
+    // Re-fetch to get updated data
+    const { data: updated } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', user.id)
+      .single();
 
-    res.json({
-      id: user.id,
-      username: user.username,
-      displayName: user.displayName,
-      avatar: user.avatar,
-      bio: user.bio
-    });
+    res.json(mapUser(updated));
   } catch (error) {
     console.error('Update user error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -129,10 +161,7 @@ router.put('/:username', authMiddleware, async (req: AuthRequest, res: Response)
 // Follow user
 router.post('/:username/follow', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    await safeRead();
-
-    const targetUser = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
-
+    const targetUser = await getUserByUsername(req.params.username);
     if (!targetUser) {
       res.status(404).json({ error: 'User not found' });
       return;
@@ -144,22 +173,25 @@ router.post('/:username/follow', authMiddleware, async (req: AuthRequest, res: R
     }
 
     // Check if already following
-    const existingFollow = db.data.follows.find(
-      f => f.followerId === req.user!.userId && f.followingId === targetUser.id
-    );
+    const { data: existing } = await supabase
+      .from('follows')
+      .select('id')
+      .eq('follower_id', req.user!.userId)
+      .eq('following_id', targetUser.id)
+      .maybeSingle();
 
-    if (existingFollow) {
+    if (existing) {
       res.status(400).json({ error: 'Already following this user' });
       return;
     }
 
-    db.data.follows.push({
-      followerId: req.user!.userId,
-      followingId: targetUser.id,
-      createdAt: new Date().toISOString()
+    const { error } = await supabase.from('follows').insert({
+      follower_id: req.user!.userId,
+      following_id: targetUser.id,
+      created_at: new Date().toISOString()
     });
 
-    await db.write();
+    if (error) throw error;
 
     res.json({ success: true, message: `Now following ${targetUser.username}` });
   } catch (error) {
@@ -171,26 +203,31 @@ router.post('/:username/follow', authMiddleware, async (req: AuthRequest, res: R
 // Unfollow user
 router.delete('/:username/follow', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    await safeRead();
-
-    const targetUser = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
-
+    const targetUser = await getUserByUsername(req.params.username);
     if (!targetUser) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    const followIndex = db.data.follows.findIndex(
-      f => f.followerId === req.user!.userId && f.followingId === targetUser.id
-    );
+    const { data: existing } = await supabase
+      .from('follows')
+      .select('id')
+      .eq('follower_id', req.user!.userId)
+      .eq('following_id', targetUser.id)
+      .maybeSingle();
 
-    if (followIndex === -1) {
+    if (!existing) {
       res.status(400).json({ error: 'Not following this user' });
       return;
     }
 
-    db.data.follows.splice(followIndex, 1);
-    await db.write();
+    const { error } = await supabase
+      .from('follows')
+      .delete()
+      .eq('follower_id', req.user!.userId)
+      .eq('following_id', targetUser.id);
+
+    if (error) throw error;
 
     res.json({ success: true, message: `Unfollowed ${targetUser.username}` });
   } catch (error) {
@@ -202,29 +239,37 @@ router.delete('/:username/follow', authMiddleware, async (req: AuthRequest, res:
 // Get user followers
 router.get('/:username/followers', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await safeRead();
-
-    const user = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
-
+    const user = await getUserByUsername(req.params.username);
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    const followers = db.data.follows
-      .filter(f => f.followingId === user.id)
-      .map(f => {
-        const follower = db.data.users.find(u => u.id === f.followerId)!;
-        return {
-          id: follower.id,
-          username: follower.username,
-          displayName: follower.displayName,
-          avatar: follower.avatar,
-          bio: follower.bio
-        };
-      });
+    const { data: follows } = await supabase
+      .from('follows')
+      .select('follower_id')
+      .eq('following_id', user.id);
 
-    res.json(followers);
+    if (!follows?.length) {
+      res.json([]);
+      return;
+    }
+
+    const followerIds = follows.map(f => f.follower_id);
+    const { data: followers } = await supabase
+      .from('users')
+      .select('id, username, display_name, avatar, bio')
+      .in('id', followerIds);
+
+    const mapped = (followers || []).map(u => ({
+      id: u.id,
+      username: u.username,
+      displayName: u.display_name,
+      avatar: u.avatar,
+      bio: u.bio
+    }));
+
+    res.json(mapped);
   } catch (error) {
     console.error('Get followers error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -234,113 +279,114 @@ router.get('/:username/followers', optionalAuth, async (req: AuthRequest, res: R
 // Get user following
 router.get('/:username/following', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await safeRead();
-
-    const user = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
-
+    const user = await getUserByUsername(req.params.username);
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    const following = db.data.follows
-      .filter(f => f.followerId === user.id)
-      .map(f => {
-        const followed = db.data.users.find(u => u.id === f.followingId)!;
-        return {
-          id: followed.id,
-          username: followed.username,
-          displayName: followed.displayName,
-          avatar: followed.avatar,
-          bio: followed.bio
-        };
-      });
+    const { data: follows } = await supabase
+      .from('follows')
+      .select('following_id')
+      .eq('follower_id', user.id);
 
-    res.json(following);
+    if (!follows?.length) {
+      res.json([]);
+      return;
+    }
+
+    const followingIds = follows.map(f => f.following_id);
+    const { data: following } = await supabase
+      .from('users')
+      .select('id, username, display_name, avatar, bio')
+      .in('id', followingIds);
+
+    const mapped = (following || []).map(u => ({
+      id: u.id,
+      username: u.username,
+      displayName: u.display_name,
+      avatar: u.avatar,
+      bio: u.bio
+    }));
+
+    res.json(mapped);
   } catch (error) {
     console.error('Get following error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Get user reviews (enriquecidas con nombre/artista desde Spotify)
+// Get user reviews (enriched with Spotify data)
 router.get('/:username/reviews', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await safeRead();
-
-    const user = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
-
+    const user = await getUserByUsername(req.params.username);
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    const rawReviews = db.data.reviews
-      .filter(r => r.userId === user.id)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const { data: rawReviews } = await supabase
+      .from('reviews')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
 
-    // Compute vote data helper
-    function getReviewVoteData(reviewId: string) {
-      const votes = db.data.reviewVotes.filter(v => v.reviewId === reviewId);
-      const upvotes = votes.filter(v => v.direction === 1).length;
-      const downvotes = votes.filter(v => v.direction === -1).length;
-      const voteScore = upvotes - downvotes;
-      let userVote: 1 | -1 | null = null;
-      if (req.user) {
-        const found = votes.find(v => v.userId === req.user!.userId);
-        if (found) userVote = found.direction;
-      }
-      return { voteScore, userVote };
-    }
+    const reviews = rawReviews || [];
 
-    // Enriquecer con nombre + artista desde Spotify (en paralelo, usa caché)
+    // Enrich with Spotify data and vote/comment counts
     const enriched = await Promise.all(
-      rawReviews.map(async (r) => {
+      reviews.map(async (r) => {
+        const voteData = await getReviewVoteData(r.id, req.user?.userId);
+
+        let commentCount = 0;
+        const { count } = await supabase
+          .from('review_comments')
+          .select('id', { count: 'exact', head: true })
+          .eq('review_id', r.id);
+        commentCount = count ?? 0;
+
         try {
-          const info = await getTargetInfo(r.targetId, r.targetType);
-      const commentCount = db.data.reviewComments.filter(c => c.reviewId === r.id).length;
-      return {
-        id: r.id,
-        targetId: r.targetId,
-        targetType: r.targetType,
-        targetName: info.name,
-        targetArtist: info.artist,
-        targetImage: info.image,
-        rating: r.rating,
-        content: r.content,
-        createdAt: r.createdAt,
-        user: {
-          id: user.id,
-          username: user.username,
-          displayName: user.displayName,
-          avatar: user.avatar
-        },
-        ...getReviewVoteData(r.id),
-        commentCount
-      };
-    } catch {
-      // Si falla Spotify, devolver sin targetName (se muestra como "Unknown")
-      const commentCount = db.data.reviewComments.filter(c => c.reviewId === r.id).length;
-      return {
-        id: r.id,
-        targetId: r.targetId,
-        targetType: r.targetType,
-        targetName: 'Unknown',
-        targetArtist: '',
-        targetImage: '',
-        rating: r.rating,
-        content: r.content,
-        createdAt: r.createdAt,
-        user: {
-          id: user.id,
-          username: user.username,
-          displayName: user.displayName,
-          avatar: user.avatar
-        },
-        ...getReviewVoteData(r.id),
-        commentCount
-      };
-    }
+          const info = await getTargetInfo(r.target_id, r.target_type);
+          return {
+            id: r.id,
+            targetId: r.target_id,
+            targetType: r.target_type,
+            targetName: info.name,
+            targetArtist: info.artist,
+            targetImage: info.image,
+            rating: r.rating,
+            content: r.content,
+            createdAt: r.created_at,
+            user: {
+              id: user.id,
+              username: user.username,
+              displayName: user.display_name,
+              avatar: user.avatar
+            },
+            ...voteData,
+            commentCount
+          };
+        } catch {
+          return {
+            id: r.id,
+            targetId: r.target_id,
+            targetType: r.target_type,
+            targetName: 'Unknown',
+            targetArtist: '',
+            targetImage: '',
+            rating: r.rating,
+            content: r.content,
+            createdAt: r.created_at,
+            user: {
+              id: user.id,
+              username: user.username,
+              displayName: user.display_name,
+              avatar: user.avatar
+            },
+            ...voteData,
+            commentCount
+          };
+        }
       })
     );
 
@@ -354,37 +400,42 @@ router.get('/:username/reviews', optionalAuth, async (req: AuthRequest, res: Res
 // Get user lists
 router.get('/:username/lists', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await safeRead();
-
-    const user = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
-
+    const user = await getUserByUsername(req.params.username);
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    // If viewing own profile, show all lists; otherwise only public
     const isOwnProfile = req.user?.userId === user.id;
 
-    const lists = db.data.lists
-      .filter(l => l.userId === user.id && (isOwnProfile || l.isPublic))
-      .map(l => ({
-        id: l.id,
-        name: l.name,
-        description: l.description,
-        isPublic: l.isPublic,
-        itemsCount: l.items.length,
-        createdAt: l.createdAt,
-        user: {
-          id: user.id,
-          username: user.username,
-          displayName: user.displayName,
-          avatar: user.avatar
-        }
-      }))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    let query = supabase
+      .from('lists')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
 
-    res.json(lists);
+    if (!isOwnProfile) {
+      query = query.eq('is_public', true);
+    }
+
+    const { data: lists } = await query;
+
+    const mapped = (lists || []).map(l => ({
+      id: l.id,
+      name: l.name,
+      description: l.description,
+      isPublic: l.is_public,
+      itemsCount: l.items?.length || 0,
+      createdAt: l.created_at,
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.display_name,
+        avatar: user.avatar
+      }
+    }));
+
+    res.json(mapped);
   } catch (error) {
     console.error('Get user lists error:', error);
     res.status(500).json({ error: 'Internal server error' });

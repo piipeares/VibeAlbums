@@ -1,85 +1,107 @@
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import db, { ReviewComment, safeRead } from '../services/db.js';
+import { supabase } from '../services/supabase.js';
 import { authMiddleware, optionalAuth, AuthRequest } from '../middleware/auth.js';
 
 const router = Router();
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
-function attachUser(comment: ReviewComment) {
-  const user = db.data.users.find(u => u.id === comment.userId);
-  if (!user) {
-    return {
-      ...comment,
-      user: { id: '', username: 'Deleted', displayName: 'Deleted', avatar: '' }
-    };
-  }
-  return {
-    ...comment,
-    user: {
-      id: user.id,
-      username: user.username,
-      displayName: user.displayName,
-      avatar: user.avatar
+async function attachUserToComment(comment: any) {
+  let userInfo = { id: '', username: 'Deleted', displayName: 'Deleted', avatar: '' };
+
+  if (comment.user_id) {
+    const { data: u } = await supabase
+      .from('users')
+      .select('id, username, display_name, avatar')
+      .eq('id', comment.user_id)
+      .single();
+
+    if (u) {
+      userInfo = { id: u.id, username: u.username, displayName: u.display_name, avatar: u.avatar };
     }
+  }
+
+  return {
+    id: comment.id,
+    reviewId: comment.review_id,
+    userId: comment.user_id,
+    content: comment.content,
+    parentCommentId: comment.parent_comment_id,
+    createdAt: comment.created_at,
+    updatedAt: comment.updated_at,
+    user: userInfo
   };
 }
 
-// Get comments for a review
-// GET /api/reviews/:id/comments
+// GET /api/reviews/:id/comments — get comments for a review
 router.get('/reviews/:id/comments', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await safeRead();
-
     const reviewId = req.params.id;
 
     // Verify review exists
-    const review = db.data.reviews.find(r => r.id === reviewId);
+    const { data: review } = await supabase
+      .from('reviews')
+      .select('id')
+      .eq('id', reviewId)
+      .maybeSingle();
+
     if (!review) {
       res.status(404).json({ error: 'Review not found' });
       return;
     }
 
-    const allComments = db.data.reviewComments
-      .filter(c => c.reviewId === reviewId)
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const { data: allComments } = await supabase
+      .from('review_comments')
+      .select('*')
+      .eq('review_id', reviewId)
+      .order('created_at', { ascending: true });
+
+    const comments = allComments || [];
 
     // Separate top-level from replies
-    const topLevel = allComments.filter(c => !c.parentCommentId);
-    const replies = allComments.filter(c => c.parentCommentId);
+    const topLevel = comments.filter(c => !c.parent_comment_id);
+    const replies = comments.filter(c => c.parent_comment_id);
 
-    const comments = topLevel.map(parent => ({
-      ...attachUser(parent),
-      replies: replies
-        .filter(r => r.parentCommentId === parent.id)
-        .map(r => attachUser(r))
-    }));
+    const mapped = await Promise.all(
+      topLevel.map(async (parent) => {
+        const parentWithUser = await attachUserToComment(parent);
+        const replyPromises = replies
+          .filter(r => r.parent_comment_id === parent.id)
+          .map(r => attachUserToComment(r));
+        const replyResults = await Promise.all(replyPromises);
+        return {
+          ...parentWithUser,
+          replies: replyResults
+        };
+      })
+    );
 
-    res.json({ comments });
+    res.json({ comments: mapped });
   } catch (error) {
     console.error('Get comments error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Create a comment on a review
-// POST /api/reviews/:id/comments
+// POST /api/reviews/:id/comments — create a comment
 router.post('/reviews/:id/comments', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const { content, parentCommentId } = req.body as { content?: string; parentCommentId?: string };
     const reviewId = req.params.id;
 
-    // Validate content
     if (!content || typeof content !== 'string' || !content.trim()) {
       res.status(400).json({ error: 'Content is required and cannot be empty' });
       return;
     }
 
-    await safeRead();
-
     // Verify review exists
-    const review = db.data.reviews.find(r => r.id === reviewId);
+    const { data: review } = await supabase
+      .from('reviews')
+      .select('id')
+      .eq('id', reviewId)
+      .maybeSingle();
+
     if (!review) {
       res.status(404).json({ error: 'Review not found' });
       return;
@@ -89,39 +111,44 @@ router.post('/reviews/:id/comments', authMiddleware, async (req: AuthRequest, re
     let resolvedParentId: string | undefined;
 
     if (parentCommentId) {
-      const parentComment = db.data.reviewComments.find(
-        c => c.id === parentCommentId && c.reviewId === reviewId
-      );
+      const { data: parentComment } = await supabase
+        .from('review_comments')
+        .select('id, parent_comment_id, review_id')
+        .eq('id', parentCommentId)
+        .eq('review_id', reviewId)
+        .maybeSingle();
+
       if (!parentComment) {
         res.status(404).json({ error: 'Parent comment not found or does not belong to this review' });
         return;
       }
       // Flatten to one level: if replying to a reply, attach to the top-level parent instead
-      resolvedParentId = parentComment.parentCommentId || parentCommentId;
+      resolvedParentId = parentComment.parent_comment_id || parentCommentId;
     }
 
-    const newComment: ReviewComment = {
+    const now = new Date().toISOString();
+    const newComment = {
       id: uuidv4(),
-      reviewId,
-      userId: req.user!.userId,
+      review_id: reviewId,
+      user_id: req.user!.userId,
       content: content.trim(),
-      parentCommentId: resolvedParentId,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      parent_comment_id: resolvedParentId || null,
+      created_at: now,
+      updated_at: now
     };
 
-    db.data.reviewComments.push(newComment);
-    await db.write();
+    const { error } = await supabase.from('review_comments').insert(newComment);
+    if (error) throw error;
 
-    res.status(201).json({ comment: attachUser(newComment) });
+    const enriched = await attachUserToComment(newComment);
+    res.status(201).json({ comment: enriched });
   } catch (error) {
     console.error('Create comment error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Update a comment
-// PUT /api/comments/:id
+// PUT /api/comments/:id — update a comment
 router.put('/comments/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const { content } = req.body as { content?: string };
@@ -131,58 +158,69 @@ router.put('/comments/:id', authMiddleware, async (req: AuthRequest, res: Respon
       return;
     }
 
-    await safeRead();
+    const { data: comment, error: fetchError } = await supabase
+      .from('review_comments')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
 
-    const commentIndex = db.data.reviewComments.findIndex(c => c.id === req.params.id);
-    if (commentIndex === -1) {
+    if (fetchError || !comment) {
       res.status(404).json({ error: 'Comment not found' });
       return;
     }
 
-    const comment = db.data.reviewComments[commentIndex];
-    if (comment.userId !== req.user!.userId) {
+    if (comment.user_id !== req.user!.userId) {
       res.status(403).json({ error: 'Not authorized to update this comment' });
       return;
     }
 
-    comment.content = content.trim();
-    comment.updatedAt = new Date().toISOString();
-    await db.write();
+    const { error } = await supabase
+      .from('review_comments')
+      .update({ content: content.trim(), updated_at: new Date().toISOString() })
+      .eq('id', req.params.id);
 
-    res.json({ comment: attachUser(comment) });
+    if (error) throw error;
+
+    const { data: updated } = await supabase
+      .from('review_comments')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
+
+    const enriched = await attachUserToComment(updated);
+    res.json({ comment: enriched });
   } catch (error) {
     console.error('Update comment error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Delete a comment (cascade: also deletes replies)
-// DELETE /api/comments/:id
+// DELETE /api/comments/:id — delete a comment (cascade replies via DB)
 router.delete('/comments/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    await safeRead();
+    const { data: comment, error: fetchError } = await supabase
+      .from('review_comments')
+      .select('id, user_id')
+      .eq('id', req.params.id)
+      .single();
 
-    const commentIndex = db.data.reviewComments.findIndex(c => c.id === req.params.id);
-    if (commentIndex === -1) {
+    if (fetchError || !comment) {
       res.status(404).json({ error: 'Comment not found' });
       return;
     }
 
-    const comment = db.data.reviewComments[commentIndex];
-    if (comment.userId !== req.user!.userId) {
+    if (comment.user_id !== req.user!.userId) {
       res.status(403).json({ error: 'Not authorized to delete this comment' });
       return;
     }
 
-    // Remove the comment
-    db.data.reviewComments.splice(commentIndex, 1);
+    // Delete the comment (replies cascade via DB foreign key)
+    const { error } = await supabase
+      .from('review_comments')
+      .delete()
+      .eq('id', req.params.id);
 
-    // Cascade: also delete any replies to this comment
-    db.data.reviewComments = db.data.reviewComments.filter(
-      c => c.parentCommentId !== req.params.id
-    );
-
-    await db.write();
+    if (error) throw error;
 
     res.json({ success: true });
   } catch (error) {

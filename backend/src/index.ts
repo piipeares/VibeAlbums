@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { initDb } from './services/db.js';
+import { supabase } from './services/supabase.js';
 import authRoutes from './routes/auth.js';
 import usersRoutes from './routes/users.js';
 import reviewsRoutes from './routes/reviews.js';
@@ -42,19 +42,30 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
-async function start() {
-  try {
-    await initDb();
-    console.log('Database initialized');
+// Export for Vercel serverless
+export default app;
 
-    app.listen(PORT, () => {
-      console.log(`🎸 VibeAlbums API running on http://localhost:${PORT}`);
-    });
-  } catch (error) {
-    console.error('Failed to start server:', error);
-    process.exit(1);
+// Start server locally (Vercel handles this via serverless wrapper)
+const isVercel = process.env.VERCEL === '1';
+if (!isVercel) {
+  async function start() {
+    try {
+      // Verify Supabase connection
+      const { error } = await supabase.from('users').select('id', { count: 'exact', head: true });
+      if (error) {
+        console.error('Supabase connection failed:', error.message);
+        process.exit(1);
+      }
+      console.log('✅ Connected to Supabase');
+
+      app.listen(PORT, () => {
+        console.log(`🎸 VibeAlbums API running on http://localhost:${PORT}`);
+      });
+    } catch (error) {
+      console.error('Failed to start server:', error);
+      process.exit(1);
+    }
   }
-}
 
-start();
+  start();
+}
