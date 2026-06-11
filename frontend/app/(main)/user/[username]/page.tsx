@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ProfileSkeleton, AlbumCardSkeleton } from '@/components/ui/skeleton'
 import { ReviewCard } from '@/components/review/review-card'
+import { UserListModal } from '@/components/user/user-list-modal'
 
 export default function UserProfilePage() {
   const params = useParams()
@@ -27,6 +28,7 @@ export default function UserProfilePage() {
   const [isLoading, setIsLoading] = React.useState(true)
 
   const isOwnProfile = currentUser?.username === username
+  const [listModal, setListModal] = React.useState<{ type: 'followers' | 'following' } | null>(null)
 
   React.useEffect(() => {
     async function loadData() {
@@ -112,13 +114,19 @@ export default function UserProfilePage() {
               <ListMusic className="h-4 w-4 text-secondary" />
               <span>{profile.stats?.lists || 0} lists</span>
             </div>
-            <div className="flex items-center gap-2 text-sm text-zinc-400">
+            <button
+              onClick={() => setListModal({ type: 'followers' })}
+              className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+            >
               <Users className="h-4 w-4 text-primary" />
               <span>{profile.stats?.followers || 0} followers</span>
-            </div>
-            <div className="flex items-center gap-2 text-sm text-zinc-400">
+            </button>
+            <button
+              onClick={() => setListModal({ type: 'following' })}
+              className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+            >
               <span>{profile.stats?.following || 0} following</span>
-            </div>
+            </button>
           </div>
 
           <div className="mt-4 flex items-center gap-2 text-sm text-zinc-500">
@@ -208,6 +216,13 @@ export default function UserProfilePage() {
           )}
         </div>
       )}
+      {/* Followers / Following Modal */}
+      <UserListModal
+        username={username}
+        type={listModal?.type || 'followers'}
+        isOpen={!!listModal}
+        onClose={() => setListModal(null)}
+      />
     </div>
   )
 }

@@ -28,7 +28,7 @@ export default function LoginPage() {
     try {
       const result = await authApi.login({ email, password })
       setAuth(result.user, result.token)
-      router.push('/')
+      router.replace('/explore')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
     } finally {

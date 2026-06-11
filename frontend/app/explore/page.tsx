@@ -2,7 +2,7 @@
 
 import React from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Disc, Music2, Search as SearchIcon, ChevronLeft, ChevronRight, User } from 'lucide-react'
+import { Disc, Music2, Search as SearchIcon, ChevronLeft, ChevronRight, User, RefreshCw } from 'lucide-react'
 import { spotifyApi, SpotifyAlbum, SpotifyTrack } from '@/lib/api'
 import { AlbumCard } from '@/components/album/album-card'
 import { AlbumCardSkeleton } from '@/components/ui/skeleton'
@@ -10,7 +10,31 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useRouter } from 'next/navigation'
 import { formatDuration } from '@/lib/utils'
+import { cacheGet, cacheSet, CACHE_TTL_MS } from '@/lib/cache'
 import Image from 'next/image'
+
+// ─── Explore Page Snapshot Cache ──────────────────────────────────
+// Guarda el resultado completo (albums + tracks + hero) como UNA sola
+// entrada en localStorage con TTL 6 horas. Así al volver a /explore
+// NO se hacen los ~40 requests individuales, se usa el snapshot.
+const EXPLORE_CACHE_KEY = 'explore-page-snapshot';
+
+interface ExploreSnapshot {
+  albums: SpotifyAlbum[];
+  tracks: SpotifyTrack[];
+  heroAlbums: SpotifyAlbum[];
+}
+
+function saveExploreSnapshot(albums: SpotifyAlbum[], tracks: SpotifyTrack[], heroAlbums: SpotifyAlbum[]): void {
+  try {
+    const snapshot: ExploreSnapshot = { albums, tracks, heroAlbums };
+    cacheSet(EXPLORE_CACHE_KEY, snapshot, CACHE_TTL_MS);
+  } catch { /* no crítico */ }
+}
+
+function loadExploreSnapshot(): ExploreSnapshot | null {
+  return cacheGet<ExploreSnapshot>(EXPLORE_CACHE_KEY);
+}
 
 // Specific albums requested by user
 const TOP_ALBUMS = [
@@ -71,7 +95,18 @@ export default function ExplorePage() {
   const [searchQuery, setSearchQuery] = React.useState('')
 
   React.useEffect(() => {
-    loadContent()
+    // Intentar cargar desde snapshot cache primero
+    const snapshot = loadExploreSnapshot()
+    if (snapshot) {
+      console.log('[ExplorePage] Snapshot cache HIT — skipping 40 requests')
+      setAlbums(snapshot.albums)
+      setTracks(snapshot.tracks)
+      setHeroAlbums(snapshot.heroAlbums)
+      setIsLoading(false)
+    } else {
+      console.log('[ExplorePage] Snapshot cache MISS — fetching fresh data')
+      loadContent()
+    }
   }, [])
 
   // Auto-rotate hero carousel
@@ -97,7 +132,8 @@ export default function ExplorePage() {
       setAlbums(validAlbums)
 
       // Use first 5 albums for hero carousel
-      setHeroAlbums(validAlbums.slice(0, 5))
+      const heroSlice = validAlbums.slice(0, 5)
+      setHeroAlbums(heroSlice)
 
       // Search for each specific song and collect results
       const trackPromises = TOP_SONGS.map(song => 
@@ -108,6 +144,10 @@ export default function ExplorePage() {
       const trackResults = await Promise.all(trackPromises)
       const validTracks = trackResults.filter((t): t is SpotifyTrack => t !== null && t !== undefined)
       setTracks(validTracks)
+
+      // Guardar snapshot completo en cache (incluye los que fallaron como arrays vacíos)
+      saveExploreSnapshot(validAlbums, validTracks, heroSlice)
+      console.log('[ExplorePage] Snapshot saved to cache')
     } catch (error) {
       console.error('Failed to load content:', error)
     } finally {
@@ -243,15 +283,34 @@ export default function ExplorePage() {
         </section>
       )}
 
-      {/* Title */}
+      {/* Title + Refresh */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="mb-6"
+        className="mb-6 flex items-center justify-between"
       >
         <h1 className="text-2xl md:text-3xl font-bold">
           <span className="text-gradient">Explorá</span> lo del momento
         </h1>
+        <button
+          onClick={() => {
+            // Invalidar snapshot y recargar
+            try { localStorage.removeItem('vibe-cache:explore-page-snapshot'); } catch {}
+            // También limpiar caché individual de los searches de esta página
+            const keysToRemove: string[] = [];
+            for (let i = 0; i < localStorage.length; i++) {
+              const k = localStorage.key(i);
+              if (k && k.startsWith('vibe-cache:/api/spotify/search')) keysToRemove.push(k);
+            }
+            keysToRemove.forEach(k => { try { localStorage.removeItem(k); } catch {} });
+            window.location.reload();
+          }}
+          className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-primary transition-colors"
+          title="Recargar datos frescos"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          Actualizar
+        </button>
       </motion.div>
 
       {/* Search Bar */}

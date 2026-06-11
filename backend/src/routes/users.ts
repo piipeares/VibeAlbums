@@ -1,13 +1,48 @@
 import { Router, Response } from 'express';
-import db, { User } from '../services/db.js';
+import db, { User, safeRead } from '../services/db.js';
 import { authMiddleware, optionalAuth, AuthRequest } from '../middleware/auth.js';
+import { getTargetInfo } from '../services/spotify.js';
 
 const router = Router();
+
+// Search users by username or displayName
+router.get('/search', optionalAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { q } = req.query;
+
+    if (!q || typeof q !== 'string' || !q.trim()) {
+      res.json([]);
+      return;
+    }
+
+    await safeRead();
+
+    const query = q.toLowerCase().trim();
+    const results = db.data.users
+      .filter(u =>
+        u.username.toLowerCase().includes(query) ||
+        u.displayName.toLowerCase().includes(query)
+      )
+      .slice(0, 20)
+      .map(u => ({
+        id: u.id,
+        username: u.username,
+        displayName: u.displayName,
+        avatar: u.avatar,
+        bio: u.bio
+      }));
+
+    res.json(results);
+  } catch (error) {
+    console.error('User search error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // Get user profile
 router.get('/:username', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
+    await safeRead();
 
     const user = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
 
@@ -55,7 +90,7 @@ router.get('/:username', optionalAuth, async (req: AuthRequest, res: Response) =
 // Update user profile
 router.put('/:username', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
+    await safeRead();
 
     const user = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
 
@@ -94,7 +129,7 @@ router.put('/:username', authMiddleware, async (req: AuthRequest, res: Response)
 // Follow user
 router.post('/:username/follow', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
+    await safeRead();
 
     const targetUser = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
 
@@ -136,7 +171,7 @@ router.post('/:username/follow', authMiddleware, async (req: AuthRequest, res: R
 // Unfollow user
 router.delete('/:username/follow', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
+    await safeRead();
 
     const targetUser = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
 
@@ -167,7 +202,7 @@ router.delete('/:username/follow', authMiddleware, async (req: AuthRequest, res:
 // Get user followers
 router.get('/:username/followers', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
+    await safeRead();
 
     const user = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
 
@@ -199,7 +234,7 @@ router.get('/:username/followers', optionalAuth, async (req: AuthRequest, res: R
 // Get user following
 router.get('/:username/following', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
+    await safeRead();
 
     const user = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
 
@@ -228,10 +263,10 @@ router.get('/:username/following', optionalAuth, async (req: AuthRequest, res: R
   }
 });
 
-// Get user reviews
+// Get user reviews (enriquecidas con nombre/artista desde Spotify)
 router.get('/:username/reviews', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
+    await safeRead();
 
     const user = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
 
@@ -240,11 +275,37 @@ router.get('/:username/reviews', optionalAuth, async (req: AuthRequest, res: Res
       return;
     }
 
-    const reviews = db.data.reviews
+    const rawReviews = db.data.reviews
       .filter(r => r.userId === user.id)
-      .map(r => ({
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    // Compute vote data helper
+    function getReviewVoteData(reviewId: string) {
+      const votes = db.data.reviewVotes.filter(v => v.reviewId === reviewId);
+      const upvotes = votes.filter(v => v.direction === 1).length;
+      const downvotes = votes.filter(v => v.direction === -1).length;
+      const voteScore = upvotes - downvotes;
+      let userVote: 1 | -1 | null = null;
+      if (req.user) {
+        const found = votes.find(v => v.userId === req.user!.userId);
+        if (found) userVote = found.direction;
+      }
+      return { voteScore, userVote };
+    }
+
+    // Enriquecer con nombre + artista desde Spotify (en paralelo, usa caché)
+    const enriched = await Promise.all(
+      rawReviews.map(async (r) => {
+        try {
+          const info = await getTargetInfo(r.targetId, r.targetType);
+      const commentCount = db.data.reviewComments.filter(c => c.reviewId === r.id).length;
+      return {
         id: r.id,
-        spotifyAlbumId: r.spotifyAlbumId,
+        targetId: r.targetId,
+        targetType: r.targetType,
+        targetName: info.name,
+        targetArtist: info.artist,
+        targetImage: info.image,
         rating: r.rating,
         content: r.content,
         createdAt: r.createdAt,
@@ -253,11 +314,37 @@ router.get('/:username/reviews', optionalAuth, async (req: AuthRequest, res: Res
           username: user.username,
           displayName: user.displayName,
           avatar: user.avatar
-        }
-      }))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        },
+        ...getReviewVoteData(r.id),
+        commentCount
+      };
+    } catch {
+      // Si falla Spotify, devolver sin targetName (se muestra como "Unknown")
+      const commentCount = db.data.reviewComments.filter(c => c.reviewId === r.id).length;
+      return {
+        id: r.id,
+        targetId: r.targetId,
+        targetType: r.targetType,
+        targetName: 'Unknown',
+        targetArtist: '',
+        targetImage: '',
+        rating: r.rating,
+        content: r.content,
+        createdAt: r.createdAt,
+        user: {
+          id: user.id,
+          username: user.username,
+          displayName: user.displayName,
+          avatar: user.avatar
+        },
+        ...getReviewVoteData(r.id),
+        commentCount
+      };
+    }
+      })
+    );
 
-    res.json(reviews);
+    res.json(enriched);
   } catch (error) {
     console.error('Get user reviews error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -267,7 +354,7 @@ router.get('/:username/reviews', optionalAuth, async (req: AuthRequest, res: Res
 // Get user lists
 router.get('/:username/lists', optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
-    await db.read();
+    await safeRead();
 
     const user = db.data.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
 

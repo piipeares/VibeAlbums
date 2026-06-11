@@ -1,6 +1,112 @@
 {
-  "users": [],
-  "reviews": [],
-  "lists": [],
-  "follows": []
+  "users": [
+    {
+      "id": "98ec5e62-7e19-481a-a527-b063631a7edd",
+      "username": "pipeee",
+      "email": "piipeares@gmail.com",
+      "passwordHash": "$2a$10$zRXAI0F8CA2lBgl/LCcNgO7c9Uy85OIOoLpQYTrb37d2gDuHu8aPe",
+      "displayName": "pipe",
+      "avatar": "https://api.dicebear.com/7.x/identicon/svg?seed=pipeee",
+      "bio": "",
+      "createdAt": "2026-06-10T23:20:09.318Z"
+    }
+  ],
+  "reviews": [
+    {
+      "id": "1ee10260-ed86-4770-b42a-06ab418c8e0c",
+      "userId": "98ec5e62-7e19-481a-a527-b063631a7edd",
+      "targetId": "5nUfysd9pD76m2nxU0qHmU",
+      "targetType": "album",
+      "rating": 5,
+      "content": "muy bueno",
+      "createdAt": "2026-06-10T23:35:41.385Z",
+      "updatedAt": "2026-06-10T23:35:41.385Z"
+    },
+    {
+      "id": "e5641816-eb2b-4c54-bef2-90fc025ce117",
+      "userId": "98ec5e62-7e19-481a-a527-b063631a7edd",
+      "targetId": "5TFD2bmFKGhoCRbX61nXY5",
+      "targetType": "track",
+      "rating": 4,
+      "content": "podria ser mejor",
+      "createdAt": "2026-06-11T01:08:09.895Z",
+      "updatedAt": "2026-06-11T01:08:09.895Z"
+    }
+  ],
+  "lists": [
+    {
+      "id": "6f4a51c7-089f-4c25-b220-6033a8661423",
+      "userId": "98ec5e62-7e19-481a-a527-b063631a7edd",
+      "name": "lista 1",
+      "description": "lista",
+      "isPublic": true,
+      "items": [
+        {
+          "albumId": "5nUfysd9pD76m2nxU0qHmU",
+          "albumName": "TURR4ZO",
+          "albumArtist": "Trueno",
+          "albumImage": "https://i.scdn.co/image/ab67616d0000b2736f568261be22bda6f5b1aa49",
+          "addedAt": "2026-06-10T23:35:21.216Z"
+        }
+      ],
+      "createdAt": "2026-06-10T23:35:06.110Z",
+      "updatedAt": "2026-06-10T23:35:21.216Z"
+    },
+    {
+      "id": "42a9733b-f7e7-45bc-9263-fdb6f2263113",
+      "userId": "98ec5e62-7e19-481a-a527-b063631a7edd",
+      "name": "a",
+      "description": "a",
+      "isPublic": true,
+      "items": [],
+      "createdAt": "2026-06-11T01:05:12.370Z",
+      "updatedAt": "2026-06-11T01:05:12.370Z"
+    },
+    {
+      "id": "9a3f716a-dc3e-4b1b-9336-0674df330fbb",
+      "userId": "98ec5e62-7e19-481a-a527-b063631a7edd",
+      "name": "b",
+      "description": "a",
+      "isPublic": false,
+      "items": [],
+      "createdAt": "2026-06-11T01:05:35.350Z",
+      "updatedAt": "2026-06-11T01:05:35.350Z"
+    }
+  ],
+  "follows": [],
+  "reviewVotes": [
+    {
+      "id": "481e4abc-e941-4cec-87ee-8a9015b16013",
+      "reviewId": "1ee10260-ed86-4770-b42a-06ab418c8e0c",
+      "userId": "98ec5e62-7e19-481a-a527-b063631a7edd",
+      "direction": 1,
+      "createdAt": "2026-06-11T01:02:12.216Z"
+    },
+    {
+      "id": "a55c4080-27d9-44c8-8408-ed136a354ac5",
+      "reviewId": "e5641816-eb2b-4c54-bef2-90fc025ce117",
+      "userId": "98ec5e62-7e19-481a-a527-b063631a7edd",
+      "direction": -1,
+      "createdAt": "2026-06-11T01:08:16.459Z"
+    }
+  ],
+  "reviewComments": [
+    {
+      "id": "203dee6c-b20d-4356-9b07-bf984badefcf",
+      "reviewId": "1ee10260-ed86-4770-b42a-06ab418c8e0c",
+      "userId": "98ec5e62-7e19-481a-a527-b063631a7edd",
+      "content": ":)",
+      "createdAt": "2026-06-11T01:01:59.955Z",
+      "updatedAt": "2026-06-11T01:01:59.955Z"
+    },
+    {
+      "id": "5628d022-3c65-42c1-9a0a-5310640e4ea6",
+      "reviewId": "1ee10260-ed86-4770-b42a-06ab418c8e0c",
+      "userId": "98ec5e62-7e19-481a-a527-b063631a7edd",
+      "content": ":2",
+      "parentCommentId": "203dee6c-b20d-4356-9b07-bf984badefcf",
+      "createdAt": "2026-06-11T01:02:08.477Z",
+      "updatedAt": "2026-06-11T01:02:08.477Z"
+    }
+  ]
 }

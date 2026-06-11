@@ -41,7 +41,7 @@ export default function RegisterPage() {
         displayName: displayName || username,
       })
       setAuth(result.user, result.token)
-      router.push('/')
+      router.replace('/explore')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed')
     } finally {

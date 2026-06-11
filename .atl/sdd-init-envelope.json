@@ -1,0 +1,49 @@
+{
+  "status": "success",
+  "project": "VibeAlbums",
+  "stack": {
+    "frontend": {
+      "framework": "Next.js 14 (App Router)",
+      "ui": "React 18",
+      "language": "TypeScript 5.3.2",
+      "styling": "Tailwind CSS 3.4 + PostCSS",
+      "component_library": "shadcn/ui + Radix primitives",
+      "state_management": "Zustand 4.4",
+      "animation": "Framer Motion 10.17",
+      "icons": "Lucide React",
+      "linting": "ESLint 8 (next/core-web-vitals)",
+      "type_checker": "TypeScript (strict: true)"
+    },
+    "backend": {
+      "runtime": "Node.js (ESM)",
+      "framework": "Express 4.18",
+      "language": "TypeScript 5.3.2",
+      "database": "lowdb 7 (JSON files)",
+      "auth": "JWT (jsonwebtoken + bcryptjs)",
+      "external_api": "Spotify API proxy",
+      "type_checker": "TypeScript (strict: true)",
+      "dev_server": "tsx watch"
+    },
+    "architecture": "Full-stack monorepo with separate frontend/ and backend/ directories",
+    "convention_files": []
+  },
+  "testing": {
+    "test_runner": { "installed": false, "framework": null, "reason": "No test framework dependency found in frontend or backend package.json" },
+    "layers": {
+      "unit": { "available": false, "tool": null },
+      "integration": { "available": false, "tool": null },
+      "e2e": { "available": false, "tool": null }
+    },
+    "coverage": { "available": false, "command": null },
+    "quality": {
+      "linter": { "available": true, "scope": "frontend only", "command": "npm run lint (frontend)" },
+      "type_checker": { "available": true, "scope": "both", "command": "tsc --noEmit" },
+      "formatter": { "available": false, "scope": null, "command": null }
+    },
+    "test_files_found": 0,
+    "recommendation": "Install vitest + @testing-library/react for frontend, vitest + supertest for backend to enable TDD"
+  },
+  "strict_tdd": false,
+  "test_command": null,
+  "message": "SDD init completed for VibeAlbums. Detected Next.js 14 + Express/TS full-stack architecture. No test runners installed — strict TDD cannot be enforced. Testing capabilities and project context persisted to Engram (topic_keys: sdd-init/VibeAlbums, sdd/VibeAlbums/testing-capabilities). Existing .atl/skill-registry.md found and preserved. No openspec/ directory exists (Engram-only mode). Recommended next step: install test frameworks and run sdd-explore to begin structured changes."
+}

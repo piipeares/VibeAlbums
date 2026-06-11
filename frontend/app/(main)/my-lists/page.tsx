@@ -4,12 +4,13 @@ import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
-import { ListMusic, Plus, Trash2, Edit2, Lock, Globe } from 'lucide-react'
+import { ListMusic, Plus, Trash2, Edit2, Lock, Globe, Share2 } from 'lucide-react'
 import { listsApi } from '@/lib/api'
 import { useAuthStore } from '@/lib/store'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ShareButton } from '@/components/list/share-button'
 
 export default function MyListsPage() {
   const router = useRouter()
@@ -109,6 +110,7 @@ export default function MyListsPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <ShareButton listId={list.id} />
                   <Button
                     variant="ghost"
                     size="icon"

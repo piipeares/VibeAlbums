@@ -21,38 +21,31 @@ export default function HomePage() {
   React.useEffect(() => {
     async function loadData() {
       try {
-        // Fetch albums using popular search queries
-        const promises = POPULAR_QUERIES.map(query => 
-          spotifyApi.search(query, 'album', 4)
-        )
-        
-        const results = await Promise.all(promises)
-        const allAlbums = results.flatMap(r => r.albums.items)
-        
-        // Remove duplicates by id
-        const uniqueAlbums = allAlbums.filter((album, index, self) => 
-          index === self.findIndex(a => a.id === album.id)
-        )
-        
-        // Shuffle array
-        const shuffled = uniqueAlbums.sort(() => Math.random() - 0.5)
-        
-        setFeaturedAlbums(shuffled.slice(0, 10))
-        setTrending(shuffled.slice(10, 20))
-        
-        // If we don't have enough albums, fetch more
-        if (shuffled.length < 20) {
-          const more = await spotifyApi.search('indie', 'album', 20)
-          const combined = [...shuffled, ...more.albums.items.filter(a => !shuffled.find(existing => existing.id === a.id))]
+        // Una sola llamada al backend: combina queries, deduplica, ordena por popularidad
+        const result = await spotifyApi.getHome(POPULAR_QUERIES, 4)
+        const albums = result.items
+
+        // Ya vienen ordenados por popularidad descendente desde el backend
+        setFeaturedAlbums(albums.slice(0, 10))
+        setTrending(albums.slice(10, 20))
+
+        // Si no alcanzan 20, pedir más
+        if (albums.length < 20) {
+          const more = await spotifyApi.getHome(['indie'], 20)
+          const combined = [...albums, ...more.items.filter(a => !albums.find(existing => existing.id === a.id))]
+          setFeaturedAlbums(combined.slice(0, 10))
           setTrending(combined.slice(10, 20))
         }
       } catch (error) {
         console.error('Failed to load data:', error)
-        // Fallback to just one search
+        // Fallback a new-releases
         try {
-          const fallback = await spotifyApi.search('best albums 2024', 'album', 20)
-          setFeaturedAlbums(fallback.albums.items.slice(0, 10))
-          setTrending(fallback.albums.items.slice(10, 20))
+          const fallback = await spotifyApi.getNewReleases(20)
+          const sorted = (fallback.albums.items || []).sort(
+            (a, b) => (b.popularity ?? -1) - (a.popularity ?? -1)
+          )
+          setFeaturedAlbums(sorted.slice(0, 10))
+          setTrending(sorted.slice(10, 20))
         } catch (e) {
           console.error('Fallback also failed:', e)
         }

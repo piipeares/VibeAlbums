@@ -1,3 +1,5 @@
+import { withCache } from './cache';
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 interface FetchOptions extends RequestInit {
@@ -23,7 +25,9 @@ async function apiFetch<T>(endpoint: string, options: FetchOptions = {}): Promis
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+    const err = new Error(error.error || `HTTP ${response.status}`);
+    (err as Error & { status: number }).status = response.status;
+    throw err;
   }
 
   return response.json();
@@ -49,12 +53,52 @@ export interface User {
 export interface Review {
   id: string;
   userId: string;
-  spotifyAlbumId: string;
+  targetId: string;
+  targetType: 'album' | 'track';
+  targetName?: string;
+  targetArtist?: string;
+  targetImage?: string;
   rating: number;
   content: string;
   createdAt: string;
   updatedAt: string;
   user: User;
+  voteScore?: number;
+  userVote?: 1 | -1 | null;
+  commentCount?: number;
+}
+
+export interface VoteResponse {
+  vote: {
+    id: string;
+    reviewId: string;
+    userId: string;
+    direction: 1 | -1;
+    createdAt: string;
+  } | null;
+  upvotes: number;
+  downvotes: number;
+  score: number;
+  userVote: 1 | -1 | null;
+}
+
+export interface GetVotesResponse {
+  upvotes: number;
+  downvotes: number;
+  score: number;
+  userVote: 1 | -1 | null;
+}
+
+export interface ReviewCommentData {
+  id: string;
+  reviewId: string;
+  userId: string;
+  content: string;
+  parentCommentId?: string;
+  createdAt: string;
+  updatedAt: string;
+  user: { id: string; username: string; displayName: string; avatar: string };
+  replies?: ReviewCommentData[];
 }
 
 export interface ListItem {
@@ -104,6 +148,7 @@ export interface SpotifyTrack {
     name: string;
     album_type?: string;
     images: { url: string; height: number; width: number }[];
+    release_date?: string;
   };
 }
 
@@ -133,8 +178,19 @@ export const authApi = {
     apiFetch<User>('/api/auth/me', { token }),
 };
 
+export interface UserSearchResult {
+  id: string;
+  username: string;
+  displayName: string;
+  avatar: string;
+  bio: string;
+}
+
 // Users API
 export const usersApi = {
+  search: (q: string) =>
+    apiFetch<UserSearchResult[]>(`/api/users/search?q=${encodeURIComponent(q)}`),
+
   getProfile: (username: string, token?: string) =>
     apiFetch<User>(`/api/users/${username}`, { token }),
 
@@ -162,9 +218,10 @@ export const usersApi = {
 
 // Reviews API
 export const reviewsApi = {
-  getAll: (params?: { albumId?: string; userId?: string; limit?: number; offset?: number }, token?: string) => {
+  getAll: (params?: { targetId?: string; targetType?: string; userId?: string; limit?: number; offset?: number }, token?: string) => {
     const searchParams = new URLSearchParams();
-    if (params?.albumId) searchParams.set('albumId', params.albumId);
+    if (params?.targetId) searchParams.set('targetId', params.targetId);
+    if (params?.targetType) searchParams.set('targetType', params.targetType);
     if (params?.userId) searchParams.set('userId', params.userId);
     if (params?.limit) searchParams.set('limit', params.limit.toString());
     if (params?.offset) searchParams.set('offset', params.offset.toString());
@@ -178,7 +235,13 @@ export const reviewsApi = {
       { token }
     ),
 
-  create: (data: { spotifyAlbumId: string; rating: number; content?: string }, token: string) =>
+  getForTrack: (trackId: string, token?: string) =>
+    apiFetch<{ reviews: Review[]; stats: { count: number; averageRating: number; distribution: Record<number, number> } }>(
+      `/api/reviews/track/${trackId}`,
+      { token }
+    ),
+
+  create: (data: { targetId: string; targetType: 'album' | 'track'; rating: number; content?: string }, token: string) =>
     apiFetch<Review>('/api/reviews', { method: 'POST', body: JSON.stringify(data), token }),
 
   update: (id: string, data: { rating?: number; content?: string }, token: string) =>
@@ -186,6 +249,25 @@ export const reviewsApi = {
 
   delete: (id: string, token: string) =>
     apiFetch<{ success: boolean }>(`/api/reviews/${id}`, { method: 'DELETE', token }),
+
+  vote: (reviewId: string, direction: 1 | -1, token: string) =>
+    apiFetch<VoteResponse>(`/api/reviews/${reviewId}/vote`, { method: 'POST', body: JSON.stringify({ direction }), token }),
+
+  getVotes: (reviewId: string, token?: string) =>
+    apiFetch<GetVotesResponse>(`/api/reviews/${reviewId}/votes`, { token }),
+
+  // Comments
+  getComments: (reviewId: string, token?: string) =>
+    apiFetch<{ comments: ReviewCommentData[] }>(`/api/reviews/${reviewId}/comments`, { token }),
+
+  createComment: (reviewId: string, data: { content: string; parentCommentId?: string }, token: string) =>
+    apiFetch<{ comment: ReviewCommentData }>(`/api/reviews/${reviewId}/comments`, { method: 'POST', body: JSON.stringify(data), token }),
+
+  updateComment: (commentId: string, data: { content: string }, token: string) =>
+    apiFetch<{ comment: ReviewCommentData }>(`/api/comments/${commentId}`, { method: 'PUT', body: JSON.stringify(data), token }),
+
+  deleteComment: (commentId: string, token: string) =>
+    apiFetch<{ success: boolean }>(`/api/comments/${commentId}`, { method: 'DELETE', token }),
 };
 
 // Lists API
@@ -223,34 +305,87 @@ export const listsApi = {
     apiFetch<List>(`/api/lists/${id}/reorder`, { method: 'PUT', body: JSON.stringify({ itemIds }), token }),
 };
 
-// Spotify API (proxy through our backend)
+// ─── Frontend Cache Layer ──────────────────────────────────────────
+// Cachea respuestas de Spotify en localStorage con TTL 6 horas.
+// Reduce viajes al backend → menos requests a la API de Spotify.
+// (withCache importado arriba con los demás imports)
+
+// Helper: construye la key de caché a partir del endpoint completo
+function spotifyCacheKey(endpoint: string): string {
+  return endpoint;
+}
+
+// Spotify API (proxy through our backend) — cacheada en frontend
 export const spotifyApi = {
-  search: (query: string, type: 'album' | 'track' | 'both' = 'both', limit = 20) =>
-    apiFetch<{ albums: { items: SpotifyAlbum[]; total: number }; tracks: { items: SpotifyTrack[]; total: number } }>(
-      `/api/spotify/search?q=${encodeURIComponent(query)}&type=${type}&limit=${limit}`
-    ),
+  /** Home page: queries combinadas, resultados ordenados por popularidad */
+  getHome: (queries: string[], limitPerQuery = 4) => {
+    const q = queries.join(',');
+    const endpoint = `/api/spotify/home?q=${encodeURIComponent(q)}&limit=${limitPerQuery}`;
+    return withCache(spotifyCacheKey(endpoint), () =>
+      apiFetch<{ items: SpotifyAlbum[] }>(endpoint)
+    );
+  },
+  search: (query: string, type: 'album' | 'track' | 'both' = 'both', limit = 20) => {
+    const endpoint = `/api/spotify/search?q=${encodeURIComponent(query)}&type=${type}&limit=${limit}`;
+    const key = spotifyCacheKey(endpoint);
+    return withCache(key, () =>
+      apiFetch<{ albums: { items: SpotifyAlbum[]; total: number }; tracks: { items: SpotifyTrack[]; total: number } }>(endpoint)
+    );
+  },
 
-  getAlbum: (id: string) =>
-    apiFetch<SpotifyAlbum>(`/api/spotify/album/${id}`),
+  getAlbum: (id: string) => {
+    const endpoint = `/api/spotify/album/${id}`;
+    return withCache(spotifyCacheKey(endpoint), () =>
+      apiFetch<SpotifyAlbum>(endpoint)
+    );
+  },
 
-  getAlbumTracks: (id: string) =>
-    apiFetch<{ items: SpotifyTrack[] }>(`/api/spotify/album/${id}/tracks`),
+  getAlbumTracks: (id: string) => {
+    const endpoint = `/api/spotify/album/${id}/tracks`;
+    return withCache(spotifyCacheKey(endpoint), () =>
+      apiFetch<{ items: SpotifyTrack[] }>(endpoint)
+    );
+  },
 
-  getAlbumFull: (id: string) =>
-    apiFetch<{ album: SpotifyAlbum; tracks: SpotifyTrack[] }>(`/api/spotify/album/${id}/full`),
+  getAlbumFull: (id: string) => {
+    const endpoint = `/api/spotify/album/${id}/full`;
+    return withCache(spotifyCacheKey(endpoint), () =>
+      apiFetch<{ album: SpotifyAlbum; tracks: SpotifyTrack[] }>(endpoint)
+    );
+  },
 
-  getTrack: (id: string) =>
-    apiFetch<SpotifyTrack>(`/api/spotify/track/${id}`),
+  getTrack: (id: string) => {
+    const endpoint = `/api/spotify/track/${id}`;
+    return withCache(spotifyCacheKey(endpoint), () =>
+      apiFetch<SpotifyTrack>(endpoint)
+    );
+  },
 
-  getNewReleases: (limit = 20) =>
-    apiFetch<{ albums: { items: SpotifyAlbum[] } }>(`/api/spotify/new-releases?limit=${limit}`),
+  getNewReleases: (limit = 20) => {
+    const endpoint = `/api/spotify/new-releases?limit=${limit}`;
+    return withCache(spotifyCacheKey(endpoint), () =>
+      apiFetch<{ albums: { items: SpotifyAlbum[] } }>(endpoint)
+    );
+  },
 
-  getArtist: (id: string) =>
-    apiFetch<SpotifyArtist>(`/api/spotify/artist/${id}`),
+  getArtist: (id: string) => {
+    const endpoint = `/api/spotify/artist/${id}`;
+    return withCache(spotifyCacheKey(endpoint), () =>
+      apiFetch<SpotifyArtist>(endpoint)
+    );
+  },
 
-  getArtistAlbums: (id: string, limit = 20) =>
-    apiFetch<{ items: SpotifyAlbum[] }>(`/api/spotify/artist/${id}/albums?limit=${limit}`),
+  getArtistAlbums: (id: string, limit = 20) => {
+    const endpoint = `/api/spotify/artist/${id}/albums?limit=${limit}`;
+    return withCache(spotifyCacheKey(endpoint), () =>
+      apiFetch<{ items: SpotifyAlbum[] }>(endpoint)
+    );
+  },
 
-  getArtistTopTracks: (id: string) =>
-    apiFetch<{ tracks: SpotifyTrack[] }>(`/api/spotify/artist/${id}/top-tracks`),
+  getArtistTopTracks: (id: string) => {
+    const endpoint = `/api/spotify/artist/${id}/top-tracks`;
+    return withCache(spotifyCacheKey(endpoint), () =>
+      apiFetch<{ tracks: SpotifyTrack[] }>(endpoint)
+    );
+  },
 };

@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { searchSpotify, getAlbum, getAlbumTracks, getTrack, getNewReleases, getAlbumWithTracks, getArtist, getArtistAlbums, getArtistTopTracks } from '../services/spotify.js';
+import { searchSpotify, getAlbum, getAlbumTracks, getTrack, getNewReleases, getAlbumWithTracks, getArtist, getArtistAlbums, getArtistTopTracks, getHomeAlbums } from '../services/spotify.js';
 
 const router = Router();
 
@@ -30,6 +30,38 @@ router.get('/search', async (req: Request, res: Response) => {
     console.error('Spotify search error:', error);
     const message = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({ error: 'Failed to search Spotify', details: message });
+  }
+});
+
+// Home page — múltiples queries combinadas, ordenadas por popularidad
+router.get('/home', async (req: Request, res: Response) => {
+  try {
+    const { q, limit } = req.query;
+
+    if (!q || typeof q !== 'string') {
+      res.status(400).json({ error: 'Query parameter "q" (comma-separated) is required' });
+      return;
+    }
+
+    // Split by comma, trim each query
+    const queries = q.split(',').map(s => s.trim()).filter(Boolean);
+
+    if (queries.length === 0) {
+      res.status(400).json({ error: 'At least one query is required' });
+      return;
+    }
+
+    let limitNum = 4;
+    if (limit !== undefined) {
+      limitNum = Math.min(10, Math.max(1, parseInt(String(limit), 10) || 4));
+    }
+
+    const albums = await getHomeAlbums(queries, limitNum);
+    res.json({ items: albums });
+  } catch (error) {
+    console.error('Spotify home error:', error);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: 'Failed to load home albums', details: message });
   }
 });
 

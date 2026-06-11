@@ -12,6 +12,7 @@ interface ReviewFormProps {
   initialRating?: number
   initialContent?: string
   submitLabel?: string
+  placeholder?: string
 }
 
 export function ReviewForm({
@@ -19,7 +20,8 @@ export function ReviewForm({
   isLoading,
   initialRating = 0,
   initialContent = '',
-  submitLabel = 'Post Review'
+  submitLabel = 'Post Review',
+  placeholder = 'Share your thoughts about this album...'
 }: ReviewFormProps) {
   const [rating, setRating] = React.useState(initialRating)
   const [content, setContent] = React.useState(initialContent)
@@ -51,7 +53,7 @@ export function ReviewForm({
         <textarea
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          placeholder="Share your thoughts about this album..."
+          placeholder={placeholder}
           rows={4}
           className="w-full rounded-lg border border-border bg-surface-elevated px-3 py-2 text-sm text-white placeholder:text-zinc-500 transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary resize-none"
         />

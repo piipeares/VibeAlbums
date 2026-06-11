@@ -5,7 +5,9 @@ import { initDb } from './services/db.js';
 import authRoutes from './routes/auth.js';
 import usersRoutes from './routes/users.js';
 import reviewsRoutes from './routes/reviews.js';
+import votesRoutes from './routes/votes.js';
 import listsRoutes from './routes/lists.js';
+import commentsRoutes from './routes/comments.js';
 import spotifyRoutes from './routes/spotify.js';
 
 dotenv.config();
@@ -29,7 +31,9 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/reviews', reviewsRoutes);
+app.use('/api/reviews', votesRoutes);
 app.use('/api/lists', listsRoutes);
+app.use('/api', commentsRoutes);
 app.use('/api/spotify', spotifyRoutes);
 
 // Error handler

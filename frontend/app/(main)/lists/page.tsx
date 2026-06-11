@@ -7,7 +7,6 @@ import { ListMusic, Plus } from 'lucide-react'
 import { listsApi } from '@/lib/api'
 import { useAuthStore } from '@/lib/store'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 
 export default function ListsPage() {
@@ -72,9 +71,6 @@ export default function ListsPage() {
                         <p className="text-sm text-zinc-500 mt-1 line-clamp-2">{list.description}</p>
                       )}
                     </div>
-                    {!list.isPublic && (
-                      <Badge variant="outline" className="ml-2 shrink-0">Private</Badge>
-                    )}
                   </div>
 
                   <div className="mt-4 flex items-center justify-between">

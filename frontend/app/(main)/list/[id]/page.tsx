@@ -5,13 +5,14 @@ import { useParams, useRouter } from 'next/navigation'
 import Image from 'next/image'
 import Link from 'next/link'
 import { motion } from 'framer-motion'
-import { ArrowLeft, Plus, Trash2, GripVertical, Calendar, User } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, GripVertical, Calendar, User, Share2 } from 'lucide-react'
 import { listsApi, spotifyApi } from '@/lib/api'
 import { useAuthStore } from '@/lib/store'
 import { formatDate } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ShareButton } from '@/components/list/share-button'
 
 export default function ListDetailPage() {
   const params = useParams()
@@ -165,12 +166,15 @@ export default function ListDetailPage() {
             </div>
           </div>
 
-          {isOwner && (
-            <Button onClick={() => setAddingAlbum(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Albums
-            </Button>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            <ShareButton />
+            {isOwner && (
+              <Button onClick={() => setAddingAlbum(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Albums
+              </Button>
+            )}
+          </div>
         </div>
       </motion.div>
 

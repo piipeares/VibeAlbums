@@ -1,4 +1,5 @@
 import { Header } from '@/components/ui/header'
+import { Toaster } from '@/components/ui/toast'
 
 export default function MainLayout({
   children,
@@ -11,6 +12,7 @@ export default function MainLayout({
       <main className="pt-20 pb-10">
         {children}
       </main>
+      <Toaster />
     </div>
   )
 }

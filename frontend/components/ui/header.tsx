@@ -40,6 +40,7 @@ export function Header({ onSearch, searchQuery = '' }: HeaderProps) {
 
   const navItems = [
     { href: '/explore', label: 'Explorar', icon: Home },
+    { href: '/users', label: 'Usuarios', icon: User },
     { href: '/lists', label: 'Listas', icon: ListMusic },
   ]
 

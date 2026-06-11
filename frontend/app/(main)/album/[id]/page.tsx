@@ -74,8 +74,10 @@ export default function AlbumPage() {
         }
       }
 
-      // Load reviews
-      const reviewsData = await reviewsApi.getForAlbum(itemId, token || undefined)
+      // Load reviews (album or track según corresponda)
+      const reviewsData = isTrack
+        ? await reviewsApi.getForTrack(itemId, token || undefined)
+        : await reviewsApi.getForAlbum(itemId, token || undefined)
       setReviews(reviewsData.reviews)
       setReviewStats(reviewsData.stats)
 
@@ -109,7 +111,8 @@ export default function AlbumPage() {
         setUserReview(updated)
       } else {
         const newReview = await reviewsApi.create({
-          spotifyAlbumId: itemId,
+          targetId: itemId,
+          targetType: isTrack ? 'track' : 'album',
           rating: data.rating,
           content: data.content,
         }, token)
@@ -382,6 +385,7 @@ export default function AlbumPage() {
               isLoading={isSubmitting}
               initialRating={editingReview?.rating || userReview?.rating || 0}
               initialContent={editingReview?.content || userReview?.content || ''}
+              placeholder={isTrack ? 'Share your thoughts about this track...' : 'Share your thoughts about this album...'}
             />
             <Button variant="ghost" className="mt-3 w-full" onClick={() => { setShowReviewForm(false); setEditingReview(null) }}>
               Cancelar

@@ -6,9 +6,22 @@ import { motion } from 'framer-motion'
 import { Music, LogIn, User } from 'lucide-react'
 import HeroWave from '@/components/ui/hero-wave'
 import { Button } from '@/components/ui/button'
+import { useAuthStore } from '@/lib/store'
 
 export default function LandingPage() {
   const router = useRouter()
+  const { user } = useAuthStore()
+
+  // Si ya está logueado, saltear la splash y mandar directo a la app
+  React.useEffect(() => {
+    if (user) {
+      router.replace('/explore')
+    }
+  }, [user, router])
+
+  if (user) {
+    return null // No renderiza nada mientras redirige
+  }
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden bg-black">
